@@ -7,8 +7,8 @@ rhaggard@grimnir : ~
 ```
 
 This is a list
---An unordered list
---But a list nonetheless
---Yep.
+* An unordered list
+* But a list nonetheless
+* Yep.
 
 
