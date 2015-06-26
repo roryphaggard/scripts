@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# report-cruncher - a script to digest SpiderOakBlue generated user data
+# v0.6
+# Rory P Haggard <rory.haggard@gmail.com>
+# 2014-09-04
+# GPLv3
+# 
+# Usage:  ./report-cruncher $RAWSPIDEROAKFILE
+# Requires 'json2csv'[1] to be on your $PATH
+#
+# [1] - https://github.com/jehiah/json2csv# 
+#
+
+### Global variables
+DATE=$(date +%Y%m%d)
+### Clean-up from any previous failed runs
+rm -rf SpiderOakReport-$DATE.csv
+rm -rf scrubbed-user-data.csv
+rm -rf transit.csv
+### Generate CSV headers
+echo "name,email,last_login,bytes_stored,office" >> SpiderOakReport-$DATE.csv
+### All the fun stuff starts
+for ARG in "$@"; do
+## Scrub the raw data to match JSON standard with a series of sed commands
+  cat "$ARG" \
+  | sed -e s/\u\'username\'/\"username\"/g \
+  | sed -e s/u\'/\"/g \
+  | sed -e s/\ u\"/\ \"/g \
+  | sed -e s/\',/\",/g \
+  | sed -e s/\ \'/\ \"/g \
+  | sed -e s/\':/\":/g \
+  | sed -e s/\'\]/\"\]/g \
+  | sed -e s/None,/\"None\",/g \
+  | sed -e s/True,/\"True\",/g \
+  | sed -e s/False,/\"False\",/g >> scrubbed-user-data
+  done
+### Convert each individual line to CSV file
+cat scrubbed-user-data \
+  | while read LINE; do echo $LINE \
+  | json2csv -k name,email,last_login,bytes_stored >> transit.csv; done
+### Build the final report
+cat transit.csv \
+  | while read RECORD; do
+  EMAIL=$(echo $RECORD | awk -F"," '{print $2}')
+  BYTES=$(echo $RECORD | awk -F"," '{print $4}')
+  ## Take the user's email address and search LDAP for their office location
+  GEO=$(ldapsearch -x -H ldap://ldap.example.com "ou=users,dc=example,dc=com" mail=$EMAIL location \
+    | grep "location:" \
+    | awk -F":" '{print $2}'\
+    | sed -e 's/^[ \t]*//')
+  STORAGE=$(echo $RECORD | awk -v sum="$BYTES" -F"," 'BEGIN {
+	  hum[1024^3]="GiB"; hum[1024^2]="MiB"; hum[1024]="KiB"; for (x=1024^3; x>=1024; x/=1024) 
+	      { 
+		  if (sum>=x) 
+		      { printf "%.2f %s\n",sum/x,hum[x]; break; }
+		  }
+	    if (sum<1024) print "0KiB"; 
+	  }')
+### In successive runs, awk adds location, converts epoch to IS0-8601, and 
+### converts bytes_used to human readable file sizes
+  echo $RECORD \
+    | awk -v g="$GEO" -F"," 'BEGIN { OFS = "," } {$5=g; print}' \
+    | awk -F"," 'BEGIN { OFS = "," } {$3=strftime("%Y%m%d",$3); print}' \
+    | awk -v s="$STORAGE" -F"," 'BEGIN { OFS = "," } {$4=s; print}' >> SpiderOakReport-$DATE.csv; done
+### Clean up after successful run
+rm -rf scrubbed-user-data
+rm -rf transit.csv
